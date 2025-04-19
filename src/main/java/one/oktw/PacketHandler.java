@@ -3,15 +3,16 @@ package one.oktw;
 import com.mojang.authlib.GameProfile;
 import net.fabricmc.fabric.api.networking.v1.PacketSender;
 import net.fabricmc.fabric.api.networking.v1.ServerLoginNetworking;
-import net.minecraft.network.PacketByteBuf;
 import net.minecraft.network.packet.c2s.login.LoginHelloC2SPacket;
+import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerLoginNetworkHandler;
 import net.minecraft.text.LiteralText;
-import one.oktw.mixin.ClientConnection_AddressAccessor;
-import one.oktw.mixin.ServerLoginNetworkHandler_ProfileAccessor;
+import one.oktw.mixin.core.ClientConnection_AddressAccessor;
+import one.oktw.mixin.core.ServerLoginNetworkHandler_ProfileAccessor;
+import org.apache.logging.log4j.LogManager;
 
-public class PacketHandler {
+class PacketHandler {
     private final ModConfig config;
 
     PacketHandler(ModConfig config) {
@@ -20,19 +21,32 @@ public class PacketHandler {
 
     void handleVelocityPacket(MinecraftServer server, ServerLoginNetworkHandler handler, boolean understood, PacketByteBuf buf, ServerLoginNetworking.LoginSynchronizer synchronizer, PacketSender responseSender) {
         if (!understood) {
-            handler.disconnect(new LiteralText("This server requires you to connect with Velocity."));
+            handler.disconnect(new LiteralText(config.getAbortedMessage()));
             return;
         }
 
         synchronizer.waitFor(server.submit(() -> {
-            if (!VelocityLib.checkIntegrity(buf)) {
+            try {
+                if (!VelocityLib.checkIntegrity(buf)) {
+                    handler.disconnect(new LiteralText("Unable to verify player details"));
+                    return;
+                }
+            } catch (Throwable e) {
+                LogManager.getLogger().error("Secret check failed.", e);
                 handler.disconnect(new LiteralText("Unable to verify player details"));
                 return;
             }
 
             ((ClientConnection_AddressAccessor) handler.connection).setAddress(new java.net.InetSocketAddress(VelocityLib.readAddress(buf), ((java.net.InetSocketAddress) handler.connection.getAddress()).getPort()));
 
-            GameProfile profile = VelocityLib.createProfile(buf);
+            GameProfile profile;
+            try {
+                profile = VelocityLib.createProfile(buf);
+            } catch (Exception e) {
+                LogManager.getLogger().error("Profile create failed.", e);
+                handler.disconnect(new LiteralText("Unable to read player profile"));
+                return;
+            }
 
             if (config.getHackEarlySend()) {
                 handler.onHello(new LoginHelloC2SPacket(profile));
